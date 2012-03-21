@@ -1,6 +1,6 @@
 ;;; auto-complete.el --- Auto Completion for GNU Emacs
 
-;; Copyright (C) 2008, 2009, 2010  Tomohiro Matsuyama
+;; Copyright (C) 2008, 2009, 2010, 2011, 2012  Tomohiro Matsuyama
 
 ;; Author: Tomohiro Matsuyama <m2ym.pub@gmail.com>
 ;; URL: http://cx4a.org/software/auto-complete
@@ -180,10 +180,10 @@
   '(emacs-lisp-mode lisp-mode lisp-interaction-mode
     slime-repl-mode
     c-mode cc-mode c++-mode
-    java-mode malabar-mode clojure-mode scala-mode
+    java-mode malabar-mode clojure-mode clojurescript-mode  scala-mode
     scheme-mode
     ocaml-mode tuareg-mode coq-mode haskell-mode agda-mode agda2-mode
-    perl-mode cperl-mode python-mode ruby-mode
+    perl-mode cperl-mode python-mode ruby-mode lua-mode
     ecmascript-mode javascript-mode js-mode js2-mode php-mode css-mode
     makefile-mode sh-mode fortran-mode f90-mode ada-mode
     xml-mode sgml-mode
@@ -383,7 +383,9 @@ If there is no common part, this will be nil.")
 (defvar ac-completing-map
   (let ((map (make-sparse-keymap)))
     (define-key map "\t" 'ac-expand)
+    (define-key map [tab] 'ac-expand)
     (define-key map "\r" 'ac-complete)
+    (define-key map [return] 'ac-complete)
     (define-key map (kbd "M-TAB") 'auto-complete)
     (define-key map "\C-s" 'ac-isearch)
 
@@ -603,7 +605,7 @@ If there is no common part, this will be nil.")
         (ignore-errors
           (with-temp-buffer
             (insert-file-contents filename)
-            (setq result (split-string (buffer-string) "\n"))))
+            (setq result (split-string (buffer-string) "\n" t))))
         (puthash filename result ac-file-dictionary)
         result))))
 
@@ -1285,7 +1287,11 @@ that have been made before in this function."
 
 (defun ac-quick-help (&optional force)
   (interactive)
-  (when (and (or force (null this-command))
+  ;; TODO don't use FORCE
+  (when (and (or force
+                 (called-interactively-p)
+                 ;; ac-isearch'ing
+                 (null this-command))
              (ac-menu-live-p)
              (null ac-quick-help))
       (setq ac-quick-help
@@ -1815,7 +1821,11 @@ completion menu. This workaround stops that annoying behavior."
         (princ " is ")
         (cond
          ((fboundp symbol)
-          (describe-function-1 symbol)
+          ;; import help-xref-following
+          (require 'help-mode)
+          (let ((help-xref-following t)
+                (major-mode 'help-mode)) ; avoid error in Emacs 24
+            (describe-function-1 symbol))
           (buffer-string))
          ((boundp symbol)
           (let ((file-name  (ac-symbol-file symbol 'defvar)))
@@ -1938,18 +1948,19 @@ completion menu. This workaround stops that annoying behavior."
 (defvar ac-filename-cache nil)
 
 (defun ac-filename-candidate ()
-  (unless (file-regular-p ac-prefix)
-    (ignore-errors
-      (loop with dir = (file-name-directory ac-prefix)
-            with files = (or (assoc-default dir ac-filename-cache)
-                             (let ((files (directory-files dir nil "^[^.]")))
-                               (push (cons dir files) ac-filename-cache)
-                               files))
-            for file in files
-            for path = (concat dir file)
-            collect (if (file-directory-p path)
-                        (concat path "/")
-                      path)))))
+  (let (file-name-handler-alist)
+    (unless (file-regular-p ac-prefix)
+      (ignore-errors
+        (loop with dir = (file-name-directory ac-prefix)
+              with files = (or (assoc-default dir ac-filename-cache)
+                               (let ((files (directory-files dir nil "^[^.]")))
+                                 (push (cons dir files) ac-filename-cache)
+                                 files))
+              for file in files
+              for path = (concat dir file)
+              collect (if (file-directory-p path)
+                          (concat path "/")
+                        path))))))
 
 (ac-define-source filename
   '((init . (setq ac-filename-cache nil))
