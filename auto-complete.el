@@ -98,7 +98,7 @@
   :type 'boolean
   :group 'auto-complete)
 
-(defcustom ac-use-fuzzy t
+(defcustom ac-use-fuzzy (and (locate-library "fuzzy") t)
   "Non-nil means use fuzzy matching."
   :type 'boolean
   :group 'auto-complete)
@@ -138,7 +138,14 @@
   :group 'auto-complete)
 (defvaralias 'ac-user-dictionary-files 'ac-dictionary-files)
 
-(defcustom ac-dictionary-directories nil
+(defcustom ac-dictionary-directories
+  (ignore-errors
+    (when load-file-name
+      (let ((installed-dir (file-name-directory load-file-name)))
+        (loop for name in '("ac-dict" "dict")
+              for dir = (concat installed-dir name)
+              if (file-directory-p dir)
+              collect dir))))
   "Dictionary directories."
   :type '(repeat string)
   :group 'auto-complete)
@@ -187,7 +194,8 @@
     ecmascript-mode javascript-mode js-mode js2-mode php-mode css-mode
     makefile-mode sh-mode fortran-mode f90-mode ada-mode
     xml-mode sgml-mode
-    ts-mode)
+    ts-mode
+    sclang-mode)
   "Major modes `auto-complete-mode' can run on."
   :type '(repeat symbol)
   :group 'auto-complete)
@@ -283,6 +291,11 @@ a prefix doen't contain any upper case letters."
 (defface ac-candidate-face
   '((t (:background "lightgray" :foreground "black")))
   "Face for candidate."
+  :group 'auto-complete)
+
+(defface ac-candidate-mouse-face
+  '((t (:background "blue" :foreground "white")))
+  "Mouse face for candidate."
   :group 'auto-complete)
 
 (defface ac-selection-face
@@ -419,9 +432,13 @@ If there is no common part, this will be nil.")
 
 (defvar ac-menu-map
   (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map ac-completing-map)
     (define-key map "\C-n" 'ac-next)
     (define-key map "\C-p" 'ac-previous)
-    (set-keymap-parent map ac-completing-map)
+    (define-key map [mouse-1] 'ac-mouse-1)
+    (define-key map [down-mouse-1] 'ac-ignore)
+    (define-key map [mouse-4] 'ac-mouse-4)
+    (define-key map [mouse-5] 'ac-mouse-5)
     map)
   "Keymap for completion on completing menu.")
 
@@ -772,10 +789,13 @@ You can use it in source definition like (end . `NAME')."
         (popup-create point width height
                       :around t
                       :face 'ac-candidate-face
+                      :mouse-face 'ac-candidate-mouse-face
                       :selection-face 'ac-selection-face
                       :symbol t
                       :scroll-bar t
-                      :margin-left 1)))
+                      :margin-left 1
+                      :keymap ac-menu-map ; for mouse bindings
+                      )))
 
 (defun ac-menu-delete ()
   (when ac-menu
@@ -1362,6 +1382,7 @@ that have been made before in this function."
 
 ;;;; Auto completion commands
 
+;;;###autoload
 (defun auto-complete (&optional sources)
   "Start auto-completion at current point."
   (interactive)
@@ -1390,7 +1411,7 @@ that have been made before in this function."
 (defun ac-fuzzy-complete ()
   "Start fuzzy completion at current point."
   (interactive)
-  (when (require 'fuzzy nil)
+  (when (require 'fuzzy nil t)
     (unless (ac-menu-live-p)
       (ac-start))
     (let ((ac-match-function 'fuzzy-all-completions))
@@ -1446,17 +1467,14 @@ that have been made before in this function."
       (ac-complete)
     (when (and (ac-inline-live-p)
                ac-common-part)
-      (ac-inline-hide) 
+      (ac-inline-hide)
       (ac-expand-string ac-common-part (eq last-command this-command))
       (setq ac-common-part nil)
       t)))
 
-(defun ac-complete ()
-  "Try complete."
-  (interactive)
-  (let* ((candidate (ac-selected-candidate))
-         (action (popup-item-property candidate 'action))
-         (fallback nil))
+(defun ac-complete-1 (candidate)
+  (let ((action (popup-item-property candidate 'action))
+        (fallback nil))
     (when candidate
       (unless (ac-expand-string candidate)
         (setq fallback t))
@@ -1473,6 +1491,11 @@ that have been made before in this function."
      (fallback
       (ac-fallback-command)))
     candidate))
+
+(defun ac-complete ()
+  "Try complete."
+  (interactive)
+  (ac-complete-1 (ac-selected-candidate)))
 
 (defun* ac-start (&key
                   requires
@@ -1517,6 +1540,23 @@ that have been made before in this function."
   (interactive)
   (setq ac-selected-candidate nil)
   (ac-abort))
+
+(defun ac-ignore (&rest ignore)
+  "Same as `ignore'."
+  (interactive))
+
+(defun ac-mouse-1 (event)
+  (interactive "e")
+  (popup-awhen (popup-menu-item-of-mouse-event event)
+    (ac-complete-1 it)))
+
+(defun ac-mouse-4 (event)
+  (interactive "e")
+  (ac-previous))
+
+(defun ac-mouse-5 (event)
+  (interactive "e")
+  (ac-next))
 
 (defun ac-trigger-key-command (&optional force)
   (interactive "P")
@@ -1949,7 +1989,9 @@ completion menu. This workaround stops that annoying behavior."
 
 (defun ac-filename-candidate ()
   (let (file-name-handler-alist)
-    (unless (file-regular-p ac-prefix)
+    (unless (or (and comment-start-skip
+                     (string-match comment-start-skip ac-prefix))
+                (file-regular-p ac-prefix))
       (ignore-errors
         (loop with dir = (file-name-directory ac-prefix)
               with files = (or (assoc-default dir ac-filename-cache)
